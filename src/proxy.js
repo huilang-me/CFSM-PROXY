@@ -98,6 +98,34 @@ export async function onRequest(context) {
     headers.set('X-Forwarded-For', prev ? `${prev}, ${clientIp}` : clientIp);
   }
 
+  // 同源反代修正 Origin/Referer：
+  // 浏览器握手会带上 Pages 自身的 Origin，而转发到 Workers 后，源站的
+  // request.url.host 变成源站 host，导致 MetricsBroadcaster 判定 Origin !=
+  // 自身 origin 而在 WebSocket 握手时返回 403。这里把“与 Pages 同源的请
+  // 求”的 Origin / Referer 改写为源站 origin，让源站视作同源访问。（等价于
+  // nginx 的 proxy_set_header Origin）。真正跨域到本反代的请求不会被改动。
+  const reqOrigin = headers.get('Origin');
+  if (reqOrigin) {
+    try {
+      if (new URL(reqOrigin).host === currentUrl.host) {
+        headers.set('Origin', upstream.origin);
+        const referer = headers.get('Referer');
+        if (referer) {
+          try {
+            const r = new URL(referer);
+            if (r.host === currentUrl.host) {
+              r.protocol = upstream.protocol;
+              r.host = upstream.host;
+              headers.set('Referer', r.toString());
+            }
+          } catch (_) {
+          }
+        }
+      }
+    } catch (_) {
+    }
+  }
+
   // 主题静态资源（/assets/*）由 Workers 源站反代 GitHub 得到。
   // 让 Pages 边缘对这类 GET/HEAD 做缓存，避免每次请求都走
   // Pages→Worker→GitHub 两次反代；API / WebSocket / admin 仍不缓存。
