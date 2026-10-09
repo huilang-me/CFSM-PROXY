@@ -179,8 +179,34 @@ export async function onRequest(context) {
     });
   }
 
-  //  普通响应：清理 hop-by-hop 响应头后原样透传
+  //  普通响应：清理 hop-by-hop 响应头后透传；对 HTML 页面按需注入
+  //  “复制命令上报地址改写”脚本（把 /update 上报域名从 Pages 换成 Workers，省额度）。
   const cleanHeaders = buildResponseHeaders(upstreamResponse.headers);
+  const contentType = (upstreamResponse.headers.get('Content-Type') || '').toLowerCase();
+  const shouldRewriteReportUrl =
+    String(env.REWRITE_REPORT_URL || 'on').toLowerCase() !== 'off' &&
+    status === 200 &&
+    contentType.includes('text/html') &&
+    upstream.origin !== currentUrl.origin;
+
+  if (shouldRewriteReportUrl) {
+    let html = null;
+    try {
+      html = await upstreamResponse.text();
+    } catch (_) {
+      html = null;
+    }
+    if (html) {
+      const injected = injectReportRewriteScript(html, currentUrl.origin, upstream.origin);
+      cleanHeaders.delete('Content-Length'); // 正文长度已变
+      return new Response(injected, {
+        status,
+        statusText: upstreamResponse.statusText,
+        headers: cleanHeaders
+      });
+    }
+  }
+
   return new Response(upstreamResponse.body, {
     status,
     statusText: upstreamResponse.statusText,
@@ -215,4 +241,24 @@ function rewriteLocation(location, upstream, currentUrl) {
   } catch {
     return location;
   }
+}
+
+// 向 HTML 注入一段极小脚本：在用户复制 Agent 安装/上报命令时，把命令里的
+// 上报地址 `-url=https://<pages>/update` 改写为 `https://<workers>/update`，
+// 让 Agent 直连 Workers 源站上报，大幅降低 Pages 函数的免费额度消耗。
+// 仅影响复制动作（在 clipboard.writeText 时刻替换字符串）；install.sh 下载
+// 与面板 / API / WebSocket 仍走 Pages 同源。依赖内置面板 CSP `script-src`
+// 包含 'unsafe-inline'（默认满足）；若自定义主题收紧 CSP 则会自然失效（无害）。
+function buildReportRewriteScript(pagesOrigin, workerOrigin) {
+  const from = JSON.stringify(`${pagesOrigin}/update`);
+  const to = JSON.stringify(`${workerOrigin}/update`);
+  return `<script>(function(){try{var FROM=${from},TO=${to};function fix(s){return typeof s==='string'&&s.indexOf(FROM)!==-1?s.split(FROM).join(TO):s;}var c=navigator.clipboard;if(c&&c.writeText&&!c.__cfsRewrite){var o=c.writeText.bind(c);c.writeText=function(t){return o(fix(t));};try{Object.defineProperty(c,'__cfsRewrite',{value:true});}catch(e){}}}catch(e){}})();</script>`;
+}
+
+function injectReportRewriteScript(html, pagesOrigin, workerOrigin) {
+  const tag = buildReportRewriteScript(pagesOrigin, workerOrigin);
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, `${tag}\n</head>`);
+  }
+  return `${tag}${html}`;
 }

@@ -35,6 +35,8 @@ Pages 支持自由绑定自定义域名（相比 Workers 更宽松）：
 
 反代后每个请求会变成两跳函数调用：**Pages Functions 一次 + 回源 Workers 一次**（直连时只有 Workers 一次）。因此 Workers / Pages 的每日免费请求额度会**约 ×2 消耗**、更快用尽。请求量大时建议：给高频静态资源依赖边缘缓存命中（`/assets/*`），或升级 Workers Standard。
 
+> **额度优化（已内置）**：Agent 上报频率最高，直连 Workers 源站能完全绕过 Pages 一层、大幅省额度。本项目默认会向面板注入一段小脚本，在复制安装/上报命令时自动把 `-url=https://<pages>/update` 改写为 `-url=https://<workers>/update`（install.sh 下载与面板 / API / WebSocket 仍走 Pages 同源），你直接复制粘贴即可。若复制到的仍是 Pages 地址，手动把 `-url` 改成源站地址即可；也可用环境变量 `REWRITE_REPORT_URL=off` 关闭该改写。
+
 ### 开启 Turnstile 时
 
 若源站开启了 Turnstile 验证，前端会在 Pages 域名上渲染验证组件，而 `siteverify` 校验的是 widget 配置的主机名白名单。需到 **Cloudflare Dashboard → Turnstile → 对应站点组件（Widgets）→ 编辑 → Hostnames**，把 Pages 域名（如 `<project>.pages.dev`，以及你绑定的自定义域名）加入白名单，否则验证不通过、API 会被 403 拦截。
