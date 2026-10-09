@@ -1,0 +1,8 @@
+# 本地环境变量（含源站地址），不要提交
+.env
+.env.local
+
+# Wrangler / 依赖
+.wrangler/
+.node_modules/
+node_modules/
